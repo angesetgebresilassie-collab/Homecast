@@ -30,4 +30,9 @@ class Prefs(ctx: Context) {
     var prefer1080: Boolean
         get() = sp.getBoolean("p1080", false)
         set(v) { sp.edit().putBoolean("p1080", v).apply() }
+
+    /** Optional manual receiver IP, used as an extra unicast target during discovery. */
+    var receiverIp: String
+        get() = sp.getString("rIp", "") ?: ""
+        set(v) { sp.edit().putString("rIp", v).apply() }
 }
