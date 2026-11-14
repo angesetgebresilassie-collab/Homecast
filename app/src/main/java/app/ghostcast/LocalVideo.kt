@@ -11,6 +11,7 @@ import java.io.FileInputStream
 
 data class LocalInfo(val name: String, val mime: String, val videoMime: String?, val size: Long) {
     val isH264: Boolean get() = videoMime == "video/avc"
+    val isHevc: Boolean get() = videoMime == "video/hevc"
 }
 
 object LocalVideo {
@@ -38,9 +39,13 @@ object LocalVideo {
         return LocalInfo(name, mime, videoMime, size)
     }
 
-    fun protocolInfo(i: LocalInfo): String =
-        if (i.mime == "video/mp4" && i.isH264) "http-get:*:video/mp4:DLNA.ORG_PN=AVC_MP4_HP_HD_AAC;DLNA.ORG_OP=01"
-        else "http-get:*:${i.mime}:DLNA.ORG_OP=01"
+    fun protocolInfo(i: LocalInfo): String = when {
+        i.mime == "video/mp4" && i.isH264 ->
+            "http-get:*:video/mp4:DLNA.ORG_PN=AVC_MP4_HP_HD_AAC;DLNA.ORG_OP=01"
+        // HEVC has no universally supported DLNA profile name: leave PN out and keep the real mime
+        i.isHevc -> "http-get:*:${i.mime}:DLNA.ORG_OP=01;DLNA.ORG_CI=0"
+        else -> "http-get:*:${i.mime}:DLNA.ORG_OP=01"
+    }
 }
 
 /** Serves a video the user picked from the phone, with Range support so the receiver can seek. */
