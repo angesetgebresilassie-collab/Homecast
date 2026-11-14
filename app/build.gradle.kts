@@ -39,7 +39,8 @@ android {
 dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs_nio:2.1.5")
 
-    implementation("com.github.TeamNewPipe:NewPipeExtractor:v0.24.8")
+    // v0.24.x predates YouTube's SABR enforcement; 0.26.3+ switches player client so streams resolve again
+    implementation("com.github.TeamNewPipe:NewPipeExtractor:v0.26.5")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("org.nanohttpd:nanohttpd:2.3.1")
     implementation("dev.ffmpegkit-maintained:ffmpeg:6.0.3")   // free tier: no TLS, stream copy is fine
