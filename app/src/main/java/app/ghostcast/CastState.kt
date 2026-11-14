@@ -5,10 +5,18 @@ import kotlinx.coroutines.flow.MutableStateFlow
 
 data class Renderer(val name: String, val controlUrl: String)
 
+/** Virtual receiver for testing without the real one: serves the stream and opens it in VLC. */
+const val LOCAL_PREFIX = "local://"
+val LOCAL_RENDERER = Renderer("This phone (VLC test)", "${LOCAL_PREFIX}vlc")
+val Renderer.isLocal: Boolean get() = controlUrl.startsWith(LOCAL_PREFIX)
+
 /** Shared between the UI and the cast service. */
 object CastState {
-    val status = MutableStateFlow("Paste or share a YouTube link")
+    val status = MutableStateFlow("Search YouTube or paste a link")
     val casting = MutableStateFlow(false)
+
+    /** Set by the service in VLC-test mode: the HTTP URL VLC (on this phone or a PC) can open. */
+    val testUrl = MutableStateFlow<String?>(null)
 }
 
 class Prefs(ctx: Context) {
