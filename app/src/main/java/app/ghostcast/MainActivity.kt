@@ -2,11 +2,14 @@ package app.ghostcast
 
 import android.Manifest
 import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -37,7 +40,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
     private val incoming = mutableStateOf<String?>(null)
@@ -65,6 +70,10 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+private fun formatDuration(s: Long): String =
+    if (s < 0) "LIVE" else if (s >= 3600) "%d:%02d:%02d".format(s / 3600, (s % 3600) / 60, s % 60)
+    else "%d:%02d".format(s / 60, s % 60)
+
 @Composable
 fun HomecastScreen(incoming: MutableState<String?>) {
     val ctx = LocalContext.current
@@ -75,8 +84,11 @@ fun HomecastScreen(incoming: MutableState<String?>) {
     var found by remember { mutableStateOf<List<Renderer>>(emptyList()) }
     var prefer1080 by remember { mutableStateOf(prefs.prefer1080) }
     var searching by remember { mutableStateOf(false) }
+    var results by remember { mutableStateOf<List<VideoHit>>(emptyList()) }
+    var searchingVideos by remember { mutableStateOf(false) }
     val status by CastState.status.collectAsState()
     val casting by CastState.casting.collectAsState()
+    val isLink = link.contains("http")
 
     suspend fun search(): List<Renderer> {
         searching = true
@@ -85,6 +97,32 @@ fun HomecastScreen(incoming: MutableState<String?>) {
         found = list
         searching = false
         return list
+    }
+
+    suspend fun searchVideos(q: String) {
+        searchingVideos = true
+        CastState.status.value = "Searching YouTube..."
+        runCatching { withContext(Dispatchers.IO) { YtSearch.search(q) } }
+            .onSuccess {
+                results = it
+                CastState.status.value = if (it.isEmpty()) "No videos found" else "Tap a video to cast it"
+            }
+            .onFailure { CastState.status.value = "Search failed: ${it.message}" }
+        searchingVideos = false
+    }
+
+    /** The saved receiver, or discover one. Null (with a status message) if none can be chosen yet. */
+    suspend fun pickReceiver(): Renderer? {
+        var r = receiver
+        if (r == null) {
+            val list = search()
+            when {
+                list.isEmpty() -> { CastState.status.value = "No receiver found. Is the phone on the same Wi-Fi?"; return null }
+                list.size == 1 -> { r = list[0]; receiver = r; prefs.receiver = r }
+                else -> { CastState.status.value = "Pick your receiver below, then tap Cast"; return null }
+            }
+        }
+        return r
     }
 
     fun startCast(r: Renderer, text: String) {
@@ -97,17 +135,28 @@ fun HomecastScreen(incoming: MutableState<String?>) {
         )
     }
 
+    fun startLocalCast(r: Renderer, uri: Uri) {
+        CastState.status.value = "Starting..."
+        ctx.startForegroundService(
+            Intent(ctx, CastService::class.java)
+                .putExtra(CastService.EXTRA_URI, uri.toString())
+                .putExtra(CastService.EXTRA_NAME, r.name)
+                .putExtra(CastService.EXTRA_CONTROL, r.controlUrl)
+        )
+    }
+
     suspend fun castLink(text: String) {
-        var r = receiver
-        if (r == null) {
-            val list = search()
-            when {
-                list.isEmpty() -> { CastState.status.value = "No receiver found. Is the phone on the same Wi-Fi?"; return }
-                list.size == 1 -> { r = list[0]; receiver = r; prefs.receiver = r }
-                else -> { CastState.status.value = "Pick your receiver below, then tap Cast"; return }
-            }
-        }
+        val r = pickReceiver() ?: return
         startCast(r, text)
+    }
+
+    val videoPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            runCatching {
+                ctx.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            scope.launch { pickReceiver()?.let { startLocalCast(it, uri) } }
+        }
     }
 
     LaunchedEffect(incoming.value) {
@@ -125,14 +174,18 @@ fun HomecastScreen(incoming: MutableState<String?>) {
         Text("Homecast", style = MaterialTheme.typography.headlineMedium)
         OutlinedTextField(
             value = link, onValueChange = { link = it },
-            label = { Text("YouTube link") }, singleLine = true,
+            label = { Text("Search YouTube or paste a link") }, singleLine = true,
             modifier = Modifier.fillMaxWidth()
         )
         Button(
-            onClick = { scope.launch { castLink(link) } },
-            enabled = link.isNotBlank() && !searching,
+            onClick = { scope.launch { if (isLink) castLink(link) else searchVideos(link) } },
+            enabled = link.isNotBlank() && !searching && !searchingVideos,
             modifier = Modifier.fillMaxWidth()
-        ) { Text("Cast") }
+        ) { Text(if (isLink) "Cast" else "Search") }
+        OutlinedButton(
+            onClick = { videoPicker.launch(arrayOf("video/*")) },
+            modifier = Modifier.fillMaxWidth()
+        ) { Text("Cast a video from this phone") }
         if (casting) {
             OutlinedButton(
                 onClick = { ctx.startService(Intent(ctx, CastService::class.java).setAction(CastService.ACTION_STOP)) },
@@ -140,6 +193,17 @@ fun HomecastScreen(incoming: MutableState<String?>) {
             ) { Text("Stop") }
         }
         Text(status, style = MaterialTheme.typography.bodyLarge)
+
+        results.forEach { v ->
+            Column(
+                Modifier.fillMaxWidth()
+                    .clickable { scope.launch { castLink(v.url) } }
+                    .padding(vertical = 8.dp)
+            ) {
+                Text(v.title, style = MaterialTheme.typography.titleSmall, maxLines = 2)
+                Text("${v.channel} · ${formatDuration(v.seconds)}", style = MaterialTheme.typography.bodySmall)
+            }
+        }
 
         Spacer(Modifier.height(12.dp))
         Text("Receiver: ${receiver?.name ?: "none chosen yet"}", style = MaterialTheme.typography.titleMedium)
