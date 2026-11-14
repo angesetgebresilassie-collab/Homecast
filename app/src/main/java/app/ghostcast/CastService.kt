@@ -8,6 +8,7 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.net.Uri
 import android.net.wifi.WifiManager
 import android.os.IBinder
 import android.os.PowerManager
@@ -23,24 +24,27 @@ import java.net.Inet4Address
 import java.net.NetworkInterface
 
 /**
- * Does the whole job for one link: resolve -> serve -> cast. Runs as a foreground service
- * with a Wi-Fi lock and wake lock so Android doesn't kill the servers mid-cast.
+ * Does the whole job for one link or local video: resolve -> serve -> cast. Runs as a foreground
+ * service with a Wi-Fi lock and wake lock so Android doesn't kill the servers mid-cast.
  */
 class CastService : Service() {
     companion object {
         const val EXTRA_LINK = "link"
+        const val EXTRA_URI = "uri"          // a video picked from the phone's storage
         const val EXTRA_NAME = "rName"
         const val EXTRA_CONTROL = "rControl"
         const val ACTION_STOP = "app.ghostcast.STOP"
         private const val CHANNEL = "cast"
         private const val PORT_720 = 8090
         private const val PORT_1080 = 8100   // also uses 8101 and 8102 on loopback
+        private const val PORT_LOCAL = 8110
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var job: Job? = null
     private var rangeServer: RangeProxyServer? = null
     private var tsServer: TsStreamServer? = null
+    private var localServer: UriFileServer? = null
     private var control: String? = null
     private var wake: PowerManager.WakeLock? = null
     private var wifiLock: WifiManager.WifiLock? = null
@@ -55,15 +59,17 @@ class CastService : Service() {
             return START_NOT_STICKY
         }
         val link = intent?.getStringExtra(EXTRA_LINK)
+        val uriStr = intent?.getStringExtra(EXTRA_URI)
         val ctl = intent?.getStringExtra(EXTRA_CONTROL)
         val name = intent?.getStringExtra(EXTRA_NAME) ?: "receiver"
-        if (link == null || ctl == null) { stopSelf(); return START_NOT_STICKY }
+        if ((link == null && uriStr == null) || ctl == null) { stopSelf(); return START_NOT_STICKY }
 
         startFg()
         job?.cancel()
         job = scope.launch {
             try {
-                cast(link, ctl, name)
+                if (uriStr != null) castLocal(Uri.parse(uriStr), ctl, name)
+                else cast(link!!, ctl, name)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -73,6 +79,29 @@ class CastService : Service() {
             }
         }
         return START_NOT_STICKY
+    }
+
+    /** Video from internal storage: served as-is (H.264 or H.265), with seeking. */
+    private suspend fun castLocal(uri: Uri, ctl: String, name: String) {
+        closeServers()
+        acquireLocks()
+        CastState.casting.value = true
+
+        val ip = localIp() ?: error("Not connected to Wi-Fi")
+        CastState.status.value = "Reading video..."
+        val info = LocalVideo.inspect(this, uri)
+        val server = UriFileServer(this, uri, info.mime, PORT_LOCAL).also { it.start() }
+        localServer = server
+
+        CastState.status.value = "Casting to $name..."
+        UpnpCaster.cast(ctl, server.source(ip, PORT_LOCAL, info), info.name)
+        control = ctl
+        val codec = when {
+            info.isHevc -> "H.265"
+            info.isH264 -> "H.264"
+            else -> "video"
+        }
+        CastState.status.value = "Playing ${info.name} on $name ($codec, seeking on)"
     }
 
     private suspend fun cast(raw: String, ctl: String, name: String) {
@@ -132,7 +161,8 @@ class CastService : Service() {
     private fun closeServers() {
         runCatching { rangeServer?.stop() }
         runCatching { tsServer?.shutdown() }
-        rangeServer = null; tsServer = null
+        runCatching { localServer?.stop() }
+        rangeServer = null; tsServer = null; localServer = null
     }
 
     private fun acquireLocks() {
