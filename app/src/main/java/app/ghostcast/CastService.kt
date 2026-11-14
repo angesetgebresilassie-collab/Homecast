@@ -26,6 +26,9 @@ import java.net.NetworkInterface
 /**
  * Does the whole job for one link or local video: resolve -> serve -> cast. Runs as a foreground
  * service with a Wi-Fi lock and wake lock so Android doesn't kill the servers mid-cast.
+ *
+ * When the chosen receiver is the virtual "VLC test" renderer, it skips UPnP and just publishes
+ * the stream URL in [CastState.testUrl]; the UI opens it in VLC.
  */
 class CastService : Service() {
     companion object {
@@ -81,36 +84,49 @@ class CastService : Service() {
         return START_NOT_STICKY
     }
 
+    private fun isLocalTarget(ctl: String) = ctl.startsWith(LOCAL_PREFIX)
+
+    /** Real receiver: UPnP cast. VLC test: publish the URL for the UI to open. */
+    private suspend fun deliver(ctl: String, source: CastSource, title: String) {
+        if (isLocalTarget(ctl)) CastState.testUrl.value = source.url
+        else UpnpCaster.cast(this, ctl, source, title)
+    }
+
     /** Video from internal storage: served as-is (H.264 or H.265), with seeking. */
     private suspend fun castLocal(uri: Uri, ctl: String, name: String) {
         closeServers()
         acquireLocks()
         CastState.casting.value = true
+        CastState.testUrl.value = null
 
-        val ip = localIp() ?: error("Not connected to Wi-Fi")
+        val test = isLocalTarget(ctl)
+        val ip = localIp() ?: if (test) "127.0.0.1" else error("Not connected to Wi-Fi")
         CastState.status.value = "Reading video..."
         val info = LocalVideo.inspect(this, uri)
         val server = UriFileServer(this, uri, info.mime, PORT_LOCAL).also { it.start() }
         localServer = server
 
         CastState.status.value = "Casting to $name..."
-        UpnpCaster.cast(ctl, server.source(ip, PORT_LOCAL, info), info.name)
+        deliver(ctl, server.source(ip, PORT_LOCAL, info), info.name)
         control = ctl
         val codec = when {
             info.isHevc -> "H.265"
             info.isH264 -> "H.264"
             else -> "video"
         }
-        CastState.status.value = "Playing ${info.name} on $name ($codec, seeking on)"
+        CastState.status.value = if (test) "Test stream ready (${info.name}, $codec). Open it in VLC below."
+        else "Playing ${info.name} on $name ($codec, seeking on)"
     }
 
     private suspend fun cast(raw: String, ctl: String, name: String) {
         closeServers()
         acquireLocks()
         CastState.casting.value = true
+        CastState.testUrl.value = null
 
+        val test = isLocalTarget(ctl)
         val link = Regex("https?://\\S+").find(raw)?.value ?: error("No link found in that text")
-        val ip = localIp() ?: error("Not connected to Wi-Fi")
+        val ip = localIp() ?: if (test) "127.0.0.1" else error("Not connected to Wi-Fi")
         val prefer1080 = Prefs(this).prefer1080
 
         CastState.status.value = "Finding stream..."
@@ -129,10 +145,11 @@ class CastService : Service() {
         source ?: throw (lastError ?: IllegalStateException("No playable H.264 stream for this video"))
 
         CastState.status.value = "Casting to $name..."
-        UpnpCaster.cast(ctl, source, "Homecast")
+        deliver(ctl, source, "Homecast")
         control = ctl
-        CastState.status.value = "Playing on $name (" +
-            (if (source.seekable) "720p, seeking on)" else "1080p, no seeking)")
+        val quality = if (source.seekable) "720p, seeking on" else "1080p, no seeking"
+        CastState.status.value = if (test) "Test stream ready ($quality). Open it in VLC below."
+        else "Playing on $name ($quality)"
     }
 
     private fun start720(link: String, ip: String): CastSource? {
@@ -150,11 +167,12 @@ class CastService : Service() {
     }
 
     private suspend fun stopAll() {
-        control?.let { runCatching { UpnpCaster.stop(it) } }
+        control?.takeIf { !isLocalTarget(it) }?.let { runCatching { UpnpCaster.stop(this, it) } }
         control = null
         closeServers()
         releaseLocks()
         CastState.casting.value = false
+        CastState.testUrl.value = null
         CastState.status.value = "Stopped"
     }
 
@@ -217,6 +235,7 @@ class CastService : Service() {
         closeServers()
         releaseLocks()
         CastState.casting.value = false
+        CastState.testUrl.value = null
         scope.cancel()
         super.onDestroy()
     }
