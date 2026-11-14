@@ -1,6 +1,10 @@
 package app.ghostcast
 
 import android.Manifest
+import android.content.ActivityNotFoundException
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
@@ -74,6 +78,20 @@ private fun formatDuration(s: Long): String =
     if (s < 0) "LIVE" else if (s >= 3600) "%d:%02d:%02d".format(s / 3600, (s % 3600) / 60, s % 60)
     else "%d:%02d".format(s / 60, s % 60)
 
+/** Opens the test stream in VLC; falls back to the system app chooser if VLC isn't installed. */
+private fun openInVlc(ctx: Context, url: String) {
+    val base = Intent(Intent.ACTION_VIEW)
+        .setDataAndType(Uri.parse(url), "video/*")
+        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    try {
+        ctx.startActivity(Intent(base).setPackage("org.videolan.vlc"))
+    } catch (_: ActivityNotFoundException) {
+        runCatching {
+            ctx.startActivity(Intent.createChooser(base, "Open test stream").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        }
+    }
+}
+
 @Composable
 fun HomecastScreen(incoming: MutableState<String?>) {
     val ctx = LocalContext.current
@@ -81,6 +99,7 @@ fun HomecastScreen(incoming: MutableState<String?>) {
     val scope = rememberCoroutineScope()
     var link by remember { mutableStateOf("") }
     var receiver by remember { mutableStateOf(prefs.receiver) }
+    var receiverIp by remember { mutableStateOf(prefs.receiverIp) }
     var found by remember { mutableStateOf<List<Renderer>>(emptyList()) }
     var prefer1080 by remember { mutableStateOf(prefs.prefer1080) }
     var searching by remember { mutableStateOf(false) }
@@ -88,15 +107,25 @@ fun HomecastScreen(incoming: MutableState<String?>) {
     var searchingVideos by remember { mutableStateOf(false) }
     val status by CastState.status.collectAsState()
     val casting by CastState.casting.collectAsState()
+    val testUrl by CastState.testUrl.collectAsState()
     val isLink = link.contains("http")
 
     suspend fun search(): List<Renderer> {
         searching = true
         CastState.status.value = "Searching for receivers..."
-        val list = UpnpCaster.discover(ctx)
-        found = list
+        val d = runCatching { UpnpCaster.discover(ctx, prefs.receiverIp) }.getOrNull()
         searching = false
-        return list
+        found = d?.renderers ?: emptyList()
+        if (d == null) {
+            CastState.status.value = "Receiver search failed. Is Wi-Fi on?"
+        } else if (d.renderers.isEmpty()) {
+            CastState.status.value = "No receiver found (${d.responses} network replies" +
+                (if (d.seen.isNotEmpty()) "; not video players: ${d.seen.joinToString()}" else "") +
+                "). Same Wi-Fi? Try entering the receiver IP, or test with VLC below."
+        } else {
+            CastState.status.value = "Found ${d.renderers.size} receiver(s)"
+        }
+        return found
     }
 
     suspend fun searchVideos(q: String) {
@@ -111,13 +140,13 @@ fun HomecastScreen(incoming: MutableState<String?>) {
         searchingVideos = false
     }
 
-    /** The saved receiver, or discover one. Null (with a status message) if none can be chosen yet. */
+    /** The saved receiver, or discover one. Null (status already set) if none can be chosen yet. */
     suspend fun pickReceiver(): Renderer? {
         var r = receiver
         if (r == null) {
             val list = search()
             when {
-                list.isEmpty() -> { CastState.status.value = "No receiver found. Is the phone on the same Wi-Fi?"; return null }
+                list.isEmpty() -> return null
                 list.size == 1 -> { r = list[0]; receiver = r; prefs.receiver = r }
                 else -> { CastState.status.value = "Pick your receiver below, then tap Cast"; return null }
             }
@@ -167,6 +196,9 @@ fun HomecastScreen(incoming: MutableState<String?>) {
         }
     }
 
+    // VLC test mode: open the stream in VLC as soon as the service has it ready.
+    LaunchedEffect(testUrl) { testUrl?.let { openInVlc(ctx, it) } }
+
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -194,6 +226,18 @@ fun HomecastScreen(incoming: MutableState<String?>) {
         }
         Text(status, style = MaterialTheme.typography.bodyLarge)
 
+        testUrl?.let { url ->
+            Text(url, style = MaterialTheme.typography.bodySmall)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = { openInVlc(ctx, url) }) { Text("Open in VLC") }
+                OutlinedButton(onClick = {
+                    (ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager)
+                        .setPrimaryClip(ClipData.newPlainText("Homecast stream", url))
+                    CastState.status.value = "Stream URL copied. In VLC on a PC: Media > Open Network Stream."
+                }) { Text("Copy URL") }
+            }
+        }
+
         results.forEach { v ->
             Column(
                 Modifier.fillMaxWidth()
@@ -207,10 +251,16 @@ fun HomecastScreen(incoming: MutableState<String?>) {
 
         Spacer(Modifier.height(12.dp))
         Text("Receiver: ${receiver?.name ?: "none chosen yet"}", style = MaterialTheme.typography.titleMedium)
+        OutlinedTextField(
+            value = receiverIp,
+            onValueChange = { receiverIp = it; prefs.receiverIp = it },
+            label = { Text("Receiver IP (optional)") }, singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
         OutlinedButton(onClick = { scope.launch { search() } }, enabled = !searching) {
             Text(if (searching) "Searching..." else "Search for receivers")
         }
-        found.forEach { r ->
+        (found + LOCAL_RENDERER).forEach { r ->
             Row(verticalAlignment = Alignment.CenterVertically) {
                 RadioButton(
                     selected = receiver?.controlUrl == r.controlUrl,
