@@ -15,8 +15,21 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -31,20 +44,39 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.filled.Cast
+import androidx.compose.material.icons.filled.CastConnected
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.ContentPaste
+import androidx.compose.material.icons.filled.HighQuality
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Movie
+import androidx.compose.material.icons.filled.PhoneAndroid
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Router
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.Tv
+import androidx.compose.material.icons.filled.VideoLibrary
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Shapes
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
+import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -57,31 +89,70 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+/* ---------- Expressive-style theme: vibrant palette, big rounded shapes, bold type, springy motion ---------- */
+
 private val HomecastColors = darkColorScheme(
-    primary = Color(0xFF8AB4FF),
-    onPrimary = Color(0xFF05285E),
-    primaryContainer = Color(0xFF1B3A6E),
-    onPrimaryContainer = Color(0xFFD6E4FF),
-    secondaryContainer = Color(0xFF232B3A),
-    onSecondaryContainer = Color(0xFFD9E2F5),
-    errorContainer = Color(0xFF4A1F24),
-    onErrorContainer = Color(0xFFFFD9DC),
-    background = Color(0xFF0A0C10),
-    onBackground = Color(0xFFE6EAF2),
-    surface = Color(0xFF14181F),
-    onSurface = Color(0xFFE6EAF2),
-    surfaceVariant = Color(0xFF1C222C),
-    onSurfaceVariant = Color(0xFF98A2B3),
-    outline = Color(0xFF2E3646)
+    primary = Color(0xFFCBBEFF),
+    onPrimary = Color(0xFF2E2063),
+    primaryContainer = Color(0xFF4B3C94),
+    onPrimaryContainer = Color(0xFFE7DEFF),
+    secondary = Color(0xFFFFB1CC),
+    onSecondary = Color(0xFF5C1135),
+    secondaryContainer = Color(0xFF7A2A4D),
+    onSecondaryContainer = Color(0xFFFFD9E6),
+    tertiary = Color(0xFF80DBC0),
+    onTertiary = Color(0xFF00382B),
+    tertiaryContainer = Color(0xFF1C5143),
+    onTertiaryContainer = Color(0xFFA0F7DB),
+    error = Color(0xFFFFB4AB),
+    errorContainer = Color(0xFF93000A),
+    onErrorContainer = Color(0xFFFFDAD6),
+    background = Color(0xFF110E17),
+    onBackground = Color(0xFFE7E0EB),
+    surface = Color(0xFF110E17),
+    onSurface = Color(0xFFE7E0EB),
+    surfaceVariant = Color(0xFF49454F),
+    onSurfaceVariant = Color(0xFFCAC4D0),
+    surfaceContainerLow = Color(0xFF1A1721),
+    surfaceContainer = Color(0xFF1E1A26),
+    surfaceContainerHigh = Color(0xFF292431),
+    surfaceContainerHighest = Color(0xFF342E3D),
+    outline = Color(0xFF948F99),
+    outlineVariant = Color(0xFF49454F)
 )
+
+private val HomecastShapes = Shapes(
+    extraSmall = RoundedCornerShape(8.dp),
+    small = RoundedCornerShape(12.dp),
+    medium = RoundedCornerShape(20.dp),
+    large = RoundedCornerShape(28.dp),
+    extraLarge = RoundedCornerShape(36.dp)
+)
+
+private val HomecastTypography = Typography(
+    headlineLarge = TextStyle(fontSize = 40.sp, lineHeight = 44.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = (-0.5).sp),
+    titleMedium = TextStyle(fontSize = 16.sp, lineHeight = 22.sp, fontWeight = FontWeight.Bold),
+    titleSmall = TextStyle(fontSize = 15.sp, lineHeight = 20.sp, fontWeight = FontWeight.Bold),
+    bodyLarge = TextStyle(fontSize = 16.sp, lineHeight = 22.sp, fontWeight = FontWeight.Medium),
+    labelLarge = TextStyle(fontSize = 15.sp, lineHeight = 20.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.1.sp),
+    labelMedium = TextStyle(fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.8.sp)
+)
+
+private fun <T> bouncy() = spring<T>(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMediumLow)
 
 class MainActivity : ComponentActivity() {
     private val incoming = mutableStateOf<String?>(null)
@@ -97,7 +168,11 @@ class MainActivity : ComponentActivity() {
                 .launch(Manifest.permission.POST_NOTIFICATIONS)
         }
         readShared(intent)
-        setContent { MaterialTheme(colorScheme = HomecastColors) { HomecastScreen(incoming) } }
+        setContent {
+            MaterialTheme(colorScheme = HomecastColors, shapes = HomecastShapes, typography = HomecastTypography) {
+                HomecastScreen(incoming)
+            }
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -131,20 +206,106 @@ private fun openInVlc(ctx: Context, url: String) {
     }
 }
 
+/* ---------- Expressive building blocks ---------- */
+
+/** Pill button that morphs to a squarer shape and squishes while pressed. Inner corners support connected groups. */
 @Composable
-private fun SectionCard(title: String? = null, content: @Composable ColumnScope.() -> Unit) {
+private fun ExpressiveButton(
+    text: String,
+    icon: ImageVector,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    container: Color = MaterialTheme.colorScheme.primary,
+    content: Color = MaterialTheme.colorScheme.onPrimary,
+    innerStart: Boolean = false,
+    innerEnd: Boolean = false,
+    height: Dp = 56.dp,
+    loading: Boolean = false
+) {
+    val source = remember { MutableInteractionSource() }
+    val pressed by source.collectIsPressedAsState()
+    val outer by animateDpAsState(if (pressed) 16.dp else height / 2, bouncy(), label = "outer")
+    val inner by animateDpAsState(if (pressed) 16.dp else 8.dp, bouncy(), label = "inner")
+    val scale by animateFloatAsState(if (pressed) 0.95f else 1f, bouncy(), label = "scale")
+    val start = if (innerStart) inner else outer
+    val end = if (innerEnd) inner else outer
+    val colors = MaterialTheme.colorScheme
     Surface(
-        shape = RoundedCornerShape(24.dp),
-        color = MaterialTheme.colorScheme.surface,
-        modifier = Modifier.fillMaxWidth()
+        onClick = onClick,
+        enabled = enabled,
+        shape = RoundedCornerShape(topStart = start, bottomStart = start, topEnd = end, bottomEnd = end),
+        color = if (enabled) container else colors.onSurface.copy(alpha = 0.12f),
+        contentColor = if (enabled) content else colors.onSurface.copy(alpha = 0.38f),
+        interactionSource = source,
+        modifier = modifier.height(height).graphicsLayer { scaleX = scale; scaleY = scale }
     ) {
-        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Row(
+            Modifier.fillMaxSize().padding(horizontal = 18.dp),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            if (loading) ExpressiveLoader(Modifier.size(20.dp), LocalContentColorFallback(enabled, content, colors.onSurface))
+            else Icon(icon, contentDescription = null, modifier = Modifier.size(22.dp))
+            Spacer(Modifier.width(8.dp))
+            Text(text, style = MaterialTheme.typography.labelLarge, maxLines = 1)
+        }
+    }
+}
+
+private fun LocalContentColorFallback(enabled: Boolean, content: Color, disabled: Color): Color =
+    if (enabled) content else disabled.copy(alpha = 0.38f)
+
+/** A rounded square that spins and morphs towards a circle and back (stand-in for the expressive loading indicator). */
+@Composable
+private fun ExpressiveLoader(modifier: Modifier = Modifier.size(22.dp), color: Color = MaterialTheme.colorScheme.primary) {
+    val t = rememberInfiniteTransition(label = "loader")
+    val rotation by t.animateFloat(
+        initialValue = 0f, targetValue = 360f,
+        animationSpec = infiniteRepeatable(tween(1600, easing = LinearEasing)), label = "rotation"
+    )
+    val round by t.animateFloat(
+        initialValue = 0.28f, targetValue = 0.5f,
+        animationSpec = infiniteRepeatable(tween(700, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "round"
+    )
+    Box(
+        modifier
+            .graphicsLayer { rotationZ = rotation }
+            .clip(RoundedCornerShape(percent = (round * 100).toInt()))
+            .background(color)
+    )
+}
+
+@Composable
+private fun IconBubble(icon: ImageVector, container: Color, content: Color, size: Dp = 44.dp) {
+    Box(
+        Modifier.size(size).clip(CircleShape).background(container),
+        contentAlignment = Alignment.Center
+    ) { Icon(icon, contentDescription = null, tint = content, modifier = Modifier.size(size / 2)) }
+}
+
+@Composable
+private fun SectionCard(
+    title: String? = null,
+    icon: ImageVector? = null,
+    container: Color = MaterialTheme.colorScheme.surfaceContainer,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    Surface(
+        shape = MaterialTheme.shapes.extraLarge,
+        color = container,
+        modifier = Modifier.fillMaxWidth().animateContentSize(bouncy())
+    ) {
+        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             if (title != null) {
-                Text(
-                    title.uppercase(),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (icon != null) Icon(icon, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
+                    Text(
+                        title.uppercase(),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
             content()
         }
@@ -152,16 +313,32 @@ private fun SectionCard(title: String? = null, content: @Composable ColumnScope.
 }
 
 @Composable
-private fun SwitchRow(title: String, caption: String, checked: Boolean, onChange: (Boolean) -> Unit) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
+private fun SwitchRow(icon: ImageVector, title: String, caption: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+        IconBubble(icon, MaterialTheme.colorScheme.primaryContainer, MaterialTheme.colorScheme.onPrimaryContainer)
         Column(Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.bodyLarge)
+            Text(title, style = MaterialTheme.typography.titleMedium)
             Text(caption, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        Spacer(Modifier.width(12.dp))
-        Switch(checked = checked, onCheckedChange = onChange)
+        Switch(
+            checked = checked,
+            onCheckedChange = onChange,
+            thumbContent = if (checked) {
+                { Icon(Icons.Filled.Check, contentDescription = null, modifier = Modifier.size(SwitchDefaults.IconSize)) }
+            } else null
+        )
     }
 }
+
+@Composable
+private fun roundedFieldColors() = TextFieldDefaults.colors(
+    focusedIndicatorColor = Color.Transparent,
+    unfocusedIndicatorColor = Color.Transparent,
+    disabledIndicatorColor = Color.Transparent,
+    errorIndicatorColor = Color.Transparent,
+    focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+)
 
 @Composable
 fun HomecastScreen(incoming: MutableState<String?>) {
@@ -182,6 +359,7 @@ fun HomecastScreen(incoming: MutableState<String?>) {
     val testUrl by CastState.testUrl.collectAsState()
     val isLink = link.contains("http")
     val busy = searching || searchingVideos
+    val cs = MaterialTheme.colorScheme
 
     suspend fun search(): List<Renderer> {
         searching = true
@@ -272,107 +450,159 @@ fun HomecastScreen(incoming: MutableState<String?>) {
     // VLC test mode: open the stream in VLC as soon as the service has it ready.
     LaunchedEffect(testUrl) { testUrl?.let { openInVlc(ctx, it) } }
 
-    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+    Box(Modifier.fillMaxSize().background(cs.background)) {
         Column(
             Modifier.fillMaxSize().systemBarsPadding().verticalScroll(rememberScrollState())
-                .padding(horizontal = 18.dp, vertical = 12.dp),
+                .padding(horizontal = 16.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             // Header
-            Column(Modifier.padding(horizontal = 4.dp, vertical = 6.dp)) {
-                Text("Homecast", style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Bold)
-                Text(
-                    "Casting to ${receiver?.name ?: "no receiver yet"}",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+            Row(
+                Modifier.padding(horizontal = 6.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                IconBubble(Icons.Filled.Cast, cs.primaryContainer, cs.onPrimaryContainer, size = 60.dp)
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("Homecast", style = MaterialTheme.typography.headlineLarge)
+                    Surface(shape = CircleShape, color = cs.secondaryContainer, contentColor = cs.onSecondaryContainer) {
+                        Row(
+                            Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Icon(
+                                if (receiver?.isLocal == true) Icons.Filled.PhoneAndroid else Icons.Filled.Tv,
+                                null, Modifier.size(16.dp)
+                            )
+                            Text(receiver?.name ?: "No receiver yet", style = MaterialTheme.typography.labelLarge, maxLines = 1)
+                        }
+                    }
+                }
             }
 
             // What to play
             SectionCard {
-                OutlinedTextField(
+                TextField(
                     value = link, onValueChange = { link = it },
                     placeholder = { Text("Search YouTube or paste a link") },
                     singleLine = true,
-                    shape = RoundedCornerShape(16.dp),
+                    shape = RoundedCornerShape(28.dp),
+                    colors = roundedFieldColors(),
+                    leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
                     trailingIcon = {
-                        TextButton(onClick = {
+                        IconButton(onClick = {
                             val clip = (ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).primaryClip
                             val t = clip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(ctx)?.toString()
                             if (!t.isNullOrBlank()) link = t
-                        }) { Text("Paste") }
+                        }) { Icon(Icons.Filled.ContentPaste, contentDescription = "Paste") }
                     },
                     modifier = Modifier.fillMaxWidth()
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Button(
+                // Connected button group
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    ExpressiveButton(
+                        text = if (isLink) "Cast" else "Search",
+                        icon = if (isLink) Icons.Filled.Cast else Icons.Filled.Search,
                         onClick = { scope.launch { if (isLink) castLink(link) else searchVideos(link) } },
                         enabled = link.isNotBlank() && !busy,
-                        shape = RoundedCornerShape(16.dp),
-                        modifier = Modifier.weight(1f).height(52.dp)
-                    ) { Text(if (isLink) "Cast" else "Search", fontWeight = FontWeight.SemiBold) }
-                    FilledTonalButton(
+                        innerEnd = true,
+                        modifier = Modifier.weight(1f)
+                    )
+                    ExpressiveButton(
+                        text = "From phone",
+                        icon = Icons.Filled.VideoLibrary,
                         onClick = { videoPicker.launch(arrayOf("video/*")) },
-                        shape = RoundedCornerShape(16.dp),
-                        modifier = Modifier.weight(1f).height(52.dp)
-                    ) { Text("From phone") }
+                        container = cs.secondaryContainer,
+                        content = cs.onSecondaryContainer,
+                        innerStart = true,
+                        modifier = Modifier.weight(1f)
+                    )
                 }
             }
 
             // Status
-            SectionCard {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    if (busy) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-                    Text(status, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+            SectionCard(container = if (casting) cs.primaryContainer else cs.surfaceContainer) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                    if (busy) {
+                        ExpressiveLoader(Modifier.size(28.dp))
+                    } else {
+                        Icon(
+                            if (casting) Icons.Filled.CastConnected else Icons.Filled.Info,
+                            contentDescription = null,
+                            tint = if (casting) cs.onPrimaryContainer else cs.primary,
+                            modifier = Modifier.size(28.dp)
+                        )
+                    }
+                    Text(
+                        status,
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = if (casting) cs.onPrimaryContainer else cs.onSurface,
+                        modifier = Modifier.weight(1f)
+                    )
                 }
-                if (casting) {
-                    FilledTonalButton(
+                AnimatedVisibility(visible = casting) {
+                    ExpressiveButton(
+                        text = "Stop casting",
+                        icon = Icons.Filled.Stop,
                         onClick = { ctx.startService(Intent(ctx, CastService::class.java).setAction(CastService.ACTION_STOP)) },
-                        colors = ButtonDefaults.filledTonalButtonColors(
-                            containerColor = MaterialTheme.colorScheme.errorContainer,
-                            contentColor = MaterialTheme.colorScheme.onErrorContainer
-                        ),
-                        shape = RoundedCornerShape(16.dp),
-                        modifier = Modifier.fillMaxWidth().height(48.dp)
-                    ) { Text("Stop casting") }
+                        container = cs.errorContainer,
+                        content = cs.onErrorContainer,
+                        modifier = Modifier.fillMaxWidth()
+                    )
                 }
                 testUrl?.let { url ->
-                    Text(url, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Button(
+                    Text(url, style = MaterialTheme.typography.bodySmall, color = cs.onPrimaryContainer)
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        ExpressiveButton(
+                            text = "Open in VLC",
+                            icon = Icons.AutoMirrored.Filled.OpenInNew,
                             onClick = { openInVlc(ctx, url) },
-                            shape = RoundedCornerShape(14.dp),
+                            innerEnd = true,
                             modifier = Modifier.weight(1f)
-                        ) { Text("Open in VLC") }
-                        OutlinedButton(
+                        )
+                        ExpressiveButton(
+                            text = "Copy URL",
+                            icon = Icons.Filled.ContentCopy,
                             onClick = {
                                 (ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager)
                                     .setPrimaryClip(ClipData.newPlainText("Homecast stream", url))
                                 CastState.status.value = "Stream URL copied. In VLC on a PC: Media > Open Network Stream."
                             },
-                            shape = RoundedCornerShape(14.dp),
+                            container = cs.secondaryContainer,
+                            content = cs.onSecondaryContainer,
+                            innerStart = true,
                             modifier = Modifier.weight(1f)
-                        ) { Text("Copy URL") }
+                        )
                     }
                 }
             }
 
             // Search results
             if (results.isNotEmpty()) {
-                SectionCard("Results") {
+                SectionCard(title = "Results", icon = Icons.Filled.Search) {
                     results.forEach { v ->
                         Surface(
-                            shape = RoundedCornerShape(16.dp),
-                            color = MaterialTheme.colorScheme.surfaceVariant,
-                            modifier = Modifier.fillMaxWidth().clickable { scope.launch { castLink(v.url) } }
+                            onClick = { scope.launch { castLink(v.url) } },
+                            shape = MaterialTheme.shapes.large,
+                            color = cs.surfaceContainerHigh,
+                            modifier = Modifier.fillMaxWidth()
                         ) {
-                            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                Text(v.title, style = MaterialTheme.typography.titleSmall, maxLines = 2)
-                                Text(
-                                    "${v.channel} · ${formatDuration(v.seconds)}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
+                            Row(
+                                Modifier.padding(14.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(14.dp)
+                            ) {
+                                IconBubble(Icons.Filled.Movie, cs.tertiaryContainer, cs.onTertiaryContainer)
+                                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    Text(v.title, style = MaterialTheme.typography.titleSmall, maxLines = 2)
+                                    Text(
+                                        "${v.channel} · ${formatDuration(v.seconds)}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = cs.onSurfaceVariant
+                                    )
+                                }
+                                Icon(Icons.Filled.PlayArrow, contentDescription = "Cast", tint = cs.primary)
                             }
                         }
                     }
@@ -380,53 +610,72 @@ fun HomecastScreen(incoming: MutableState<String?>) {
             }
 
             // Receivers
-            SectionCard("Receivers") {
+            SectionCard(title = "Receivers", icon = Icons.Filled.Tv) {
                 (found + LOCAL_RENDERER).forEach { r ->
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.fillMaxWidth().clickable { receiver = r; prefs.receiver = r }
+                    val selected = receiver?.controlUrl == r.controlUrl
+                    Surface(
+                        onClick = { receiver = r; prefs.receiver = r },
+                        shape = MaterialTheme.shapes.large,
+                        color = if (selected) cs.primaryContainer else cs.surfaceContainerHigh,
+                        modifier = Modifier.fillMaxWidth()
                     ) {
-                        RadioButton(
-                            selected = receiver?.controlUrl == r.controlUrl,
-                            onClick = { receiver = r; prefs.receiver = r }
-                        )
-                        Column {
-                            Text(r.name, style = MaterialTheme.typography.bodyLarge)
-                            if (r.isLocal) {
-                                Text(
-                                    "Plays in VLC, no receiver needed",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
+                        Row(
+                            Modifier.padding(14.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(14.dp)
+                        ) {
+                            IconBubble(
+                                if (r.isLocal) Icons.Filled.PhoneAndroid else Icons.Filled.Tv,
+                                if (selected) cs.primary else cs.secondaryContainer,
+                                if (selected) cs.onPrimary else cs.onSecondaryContainer
+                            )
+                            Column(Modifier.weight(1f)) {
+                                Text(r.name, style = MaterialTheme.typography.titleMedium)
+                                if (r.isLocal) {
+                                    Text(
+                                        "Plays in VLC, no receiver needed",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = cs.onSurfaceVariant
+                                    )
+                                }
                             }
+                            if (selected) Icon(Icons.Filled.Check, contentDescription = "Selected", tint = cs.onPrimaryContainer)
                         }
                     }
                 }
-                OutlinedTextField(
+                TextField(
                     value = receiverIp,
                     onValueChange = { receiverIp = it; prefs.receiverIp = it },
-                    label = { Text("Receiver IP (optional)") },
+                    placeholder = { Text("Receiver IP (optional)") },
                     singleLine = true,
-                    shape = RoundedCornerShape(16.dp),
+                    shape = RoundedCornerShape(28.dp),
+                    colors = roundedFieldColors(),
+                    leadingIcon = { Icon(Icons.Filled.Router, contentDescription = null) },
                     modifier = Modifier.fillMaxWidth()
                 )
-                FilledTonalButton(
+                ExpressiveButton(
+                    text = if (searching) "Searching..." else "Search for receivers",
+                    icon = Icons.Filled.Refresh,
                     onClick = { scope.launch { search() } },
                     enabled = !searching,
-                    shape = RoundedCornerShape(16.dp),
-                    modifier = Modifier.fillMaxWidth().height(48.dp)
-                ) { Text(if (searching) "Searching..." else "Search for receivers") }
+                    loading = searching,
+                    container = cs.secondaryContainer,
+                    content = cs.onSecondaryContainer,
+                    modifier = Modifier.fillMaxWidth()
+                )
             }
 
             // Settings
-            SectionCard("Playback") {
+            SectionCard(title = "Playback", icon = Icons.Filled.Tune) {
                 SwitchRow(
+                    Icons.Filled.HighQuality,
                     "Prefer 1080p",
                     if (prefer1080) "1080p when available, otherwise 720p with seeking."
                     else "720p with seeking when available, otherwise 1080p without seeking.",
                     prefer1080
                 ) { prefer1080 = it; prefs.prefer1080 = it }
                 SwitchRow(
+                    Icons.Filled.Tune,
                     "Remux direct links",
                     if (remuxDirect) "Video files (.mkv etc.) are converted to TS for fussy receivers. No seeking."
                     else "Video files (.mkv etc.) play as they are, with seeking.",
