@@ -12,10 +12,15 @@ import org.schabi.newpipe.extractor.ServiceList
 import org.schabi.newpipe.extractor.stream.StreamInfo
 import java.io.FileInputStream
 import java.io.FilterInputStream
+import java.io.IOException
+import java.io.InputStream
 import java.net.URLDecoder
 
 /** What the UPnP controller needs to cast. */
 data class CastSource(val url: String, val protocolInfo: String, val seekable: Boolean)
+
+/** Same browser identity NewPipe uses; googlevideo rejects OkHttp's default user agent more often. */
+private const val UPSTREAM_UA = "Mozilla/5.0 (Windows NT 10.0; rv:128.0) Gecko/20100101 Firefox/128.0"
 
 /* ---------- Direct media links (.mkv, .mp4, ... on any web server) ---------- */
 
@@ -80,10 +85,10 @@ object DirectLink {
     }
 }
 
-/* ---------- 720p: muxed H.264 (itag 22, fallback 18), range passthrough, seeking works ---------- */
+/* ---------- YouTube stream helpers ---------- */
 
 object Resolver720 {
-    /** Returns the direct muxed stream URL, or null if neither itag 22 nor 18 exists. */
+    /** Fast mode: the muxed stream (itag 22 = 720p if it exists, otherwise itag 18 = 640x360). */
     fun resolve(pageUrl: String): String? {
         val info = StreamInfo.getInfo(ServiceList.YouTube, pageUrl)
         val s = info.videoStreams.firstOrNull { it.itag == 22 }
@@ -92,6 +97,76 @@ object Resolver720 {
     }
 }
 
+object UpstreamCheck {
+    private val http = OkHttpClient()
+
+    /** Throws a readable error if YouTube refuses to hand out this stream with our headers. */
+    fun verify(url: String, label: String) {
+        val sep = if (url.contains('?')) "&" else "?"
+        val req = Request.Builder()
+            .url(if (url.contains("googlevideo.com")) "$url${sep}range=0-1" else url)
+            .header("User-Agent", UPSTREAM_UA)
+            .apply { if (!url.contains("googlevideo.com")) header("Range", "bytes=0-1") }
+            .build()
+        http.newCall(req).execute().use {
+            check(it.code == 200 || it.code == 206) { "YouTube refused the $label stream (HTTP ${it.code})" }
+        }
+    }
+}
+
+/** Reads googlevideo's range-limited chunks one after another so the stream isn't throttled. */
+private class ChunkedUpstream(
+    private val http: OkHttpClient,
+    private val url: String,
+    start: Long,
+    private val end: Long
+) : InputStream() {
+    private companion object { const val CHUNK = 9_900_000L }
+
+    private var pos = start
+    private var cur: InputStream? = null
+    private var curResp: okhttp3.Response? = null
+
+    private fun openNext() {
+        val chunkEnd = minOf(end, pos + CHUNK - 1)
+        val req = Request.Builder().url("$url&range=$pos-$chunkEnd").header("User-Agent", UPSTREAM_UA).build()
+        val resp = http.newCall(req).execute()
+        if (!resp.isSuccessful) { resp.close(); throw IOException("YouTube stream refused (HTTP ${resp.code})") }
+        curResp = resp
+        cur = resp.body?.byteStream() ?: throw IOException("Empty YouTube response")
+    }
+
+    private fun closeCur() {
+        runCatching { cur?.close() }
+        runCatching { curResp?.close() }
+        cur = null; curResp = null
+    }
+
+    override fun read(): Int {
+        val one = ByteArray(1)
+        val n = read(one, 0, 1)
+        return if (n < 0) -1 else one[0].toInt() and 0xff
+    }
+
+    override fun read(b: ByteArray, off: Int, len: Int): Int {
+        while (true) {
+            if (pos > end) return -1
+            var fresh = false
+            if (cur == null) { openNext(); fresh = true }
+            val n = cur!!.read(b, off, len)
+            if (n > 0) { pos += n; return n }
+            closeCur()
+            if (fresh) return -1          // an empty chunk means the stream is over (avoids looping forever)
+        }
+    }
+
+    override fun close() = closeCur()
+}
+
+/**
+ * Proxies one upstream URL to the receiver / FFmpeg with Range support.
+ * googlevideo streams (which carry their size in the clen parameter) are read in chunks.
+ */
 class RangeProxyServer(
     private val upstreamUrl: String,
     port: Int,
@@ -99,9 +174,26 @@ class RangeProxyServer(
     private val mime: String = "video/mp4"
 ) : NanoHTTPD(host, port) {
     private val http = OkHttpClient()
+    private val clen: Long? =
+        if (upstreamUrl.contains("googlevideo.com"))
+            Regex("[?&]clen=(\\d+)").find(upstreamUrl)?.groupValues?.get(1)?.toLongOrNull()
+        else null
+
+    private fun decorate(resp: Response): Response {
+        resp.addHeader("Accept-Ranges", "bytes")
+        resp.addHeader("transferMode.dlna.org", "Streaming")
+        resp.addHeader("contentFeatures.dlna.org",
+            if (mime == "video/mp4")
+                "DLNA.ORG_PN=AVC_MP4_HP_HD_AAC;DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000"
+            else
+                "DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000")
+        return resp
+    }
 
     override fun serve(session: IHTTPSession): Response {
-        val req = Request.Builder().url(upstreamUrl).apply {
+        clen?.let { return serveChunked(session, it) }
+
+        val req = Request.Builder().url(upstreamUrl).header("User-Agent", UPSTREAM_UA).apply {
             session.headers["range"]?.let { header("Range", it) }
             if (session.method == Method.HEAD) head()
         }.build()
@@ -123,15 +215,34 @@ class RangeProxyServer(
             len < 0 -> newChunkedResponse(status, mime, body.byteStream())
             else -> newFixedLengthResponse(status, mime, body.byteStream(), len)
         }
-        resp.addHeader("Accept-Ranges", "bytes")
         up.header("Content-Range")?.let { resp.addHeader("Content-Range", it) }
-        resp.addHeader("transferMode.dlna.org", "Streaming")
-        resp.addHeader("contentFeatures.dlna.org",
-            if (mime == "video/mp4")
-                "DLNA.ORG_PN=AVC_MP4_HP_HD_AAC;DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000"
-            else
-                "DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000")
-        return resp
+        return decorate(resp)
+    }
+
+    private fun serveChunked(session: IHTTPSession, total: Long): Response {
+        var start = 0L
+        var end = total - 1
+        var partial = false
+        val range = session.headers["range"]
+        if (range != null && range.startsWith("bytes=")) {
+            val p = range.removePrefix("bytes=").split("-")
+            start = p[0].toLongOrNull() ?: 0L
+            end = p.getOrNull(1)?.toLongOrNull()?.coerceAtMost(total - 1) ?: (total - 1)
+            partial = true
+            if (start >= total) {
+                return newFixedLengthResponse(Response.Status.RANGE_NOT_SATISFIABLE, "text/plain", "")
+                    .apply { addHeader("Content-Range", "bytes */$total") }
+            }
+        }
+        val len = end - start + 1
+        val status = if (partial) Response.Status.PARTIAL_CONTENT else Response.Status.OK
+        val resp = if (session.method == Method.HEAD) {
+            newFixedLengthResponse(status, mime, null, 0).also { it.addHeader("Content-Length", len.toString()) }
+        } else {
+            newFixedLengthResponse(status, mime, ChunkedUpstream(http, upstreamUrl, start, end), len)
+        }
+        if (partial) resp.addHeader("Content-Range", "bytes $start-$end/$total")
+        return decorate(resp)
     }
 
     fun source(phoneIp: String, port: Int) = CastSource(
@@ -142,7 +253,7 @@ class RangeProxyServer(
     )
 }
 
-/* ---------- 1080p: video-only avc1 + AAC -> FFmpeg -c copy -> MPEG-TS, no seeking ---------- */
+/* ---------- HD: video-only avc1 (up to 1080p) + AAC -> FFmpeg -c copy -> MPEG-TS, no seeking ---------- */
 /* Also used to remux a single direct link (audioUrl = null) into TS for fussy receivers. */
 
 class TsStreamServer(
