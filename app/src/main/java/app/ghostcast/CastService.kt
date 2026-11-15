@@ -27,8 +27,9 @@ import java.net.NetworkInterface
  * Does the whole job for one link or local video: resolve -> serve -> cast. Runs as a foreground
  * service with a Wi-Fi lock and wake lock so Android doesn't kill the servers mid-cast.
  *
- * When the chosen receiver is the virtual "VLC test" renderer, it skips UPnP and just publishes
- * the stream URL in [CastState.testUrl]; the UI opens it in VLC.
+ * Links can be YouTube pages or direct video files (.mkv, .mp4, ...). When the chosen receiver is
+ * the virtual "VLC test" renderer, it skips UPnP and publishes the stream URL in
+ * [CastState.testUrl]; the UI opens it in VLC.
  */
 class CastService : Service() {
     companion object {
@@ -127,30 +128,56 @@ class CastService : Service() {
         val test = isLocalTarget(ctl)
         val link = Regex("https?://\\S+").find(raw)?.value ?: error("No link found in that text")
         val ip = localIp() ?: if (test) "127.0.0.1" else error("Not connected to Wi-Fi")
-        val prefer1080 = Prefs(this).prefer1080
+        val prefs = Prefs(this)
 
-        CastState.status.value = "Finding stream..."
-        val attempts = listOf<(String, String) -> CastSource?>(::start720, ::start1080)
-            .let { if (prefer1080) it.reversed() else it }
-        var source: CastSource? = null
-        var lastError: Exception? = null
-        for (attempt in attempts) {
-            try {
-                source = attempt(link, ip)
-                if (source != null) break
-            } catch (e: Exception) {
-                lastError = e
+        CastState.status.value = "Checking link..."
+        val direct = DirectLink.probe(link)
+
+        val source: CastSource
+        val title: String
+        val quality: String
+        if (direct != null) {
+            CastState.status.value = "Opening ${direct.name}..."
+            source = startDirect(direct, ip, prefs.remuxDirect)
+            title = direct.name
+            quality = if (source.seekable) "direct stream, seeking on" else "remuxed to TS, no seeking"
+        } else {
+            CastState.status.value = "Finding stream..."
+            val attempts = listOf<(String, String) -> CastSource?>(::start720, ::start1080)
+                .let { if (prefs.prefer1080) it.reversed() else it }
+            var found: CastSource? = null
+            var lastError: Exception? = null
+            for (attempt in attempts) {
+                try {
+                    found = attempt(link, ip)
+                    if (found != null) break
+                } catch (e: Exception) {
+                    lastError = e
+                }
             }
+            source = found ?: throw (lastError ?: IllegalStateException("No playable H.264 stream for this video"))
+            title = "Homecast"
+            quality = if (source.seekable) "720p, seeking on" else "1080p, no seeking"
         }
-        source ?: throw (lastError ?: IllegalStateException("No playable H.264 stream for this video"))
 
         CastState.status.value = "Casting to $name..."
-        deliver(ctl, source, "Homecast")
+        deliver(ctl, source, title)
         control = ctl
-        val quality = if (source.seekable) "720p, seeking on" else "1080p, no seeking"
         CastState.status.value = if (test) "Test stream ready ($quality). Open it in VLC below."
         else "Playing on $name ($quality)"
     }
+
+    /** A plain video file on some web server: pass it through (seekable) or remux it to TS via FFmpeg. */
+    private fun startDirect(info: DirectLink.Info, ip: String, remux: Boolean): CastSource =
+        if (remux) {
+            val server = TsStreamServer(this, info.url, null, PORT_1080).also { it.start() }
+            tsServer = server
+            server.source(ip, PORT_1080)
+        } else {
+            val server = RangeProxyServer(info.url, PORT_720, mime = info.mime).also { it.start() }
+            rangeServer = server
+            server.source(ip, PORT_720)
+        }
 
     private fun start720(link: String, ip: String): CastSource? {
         val url = Resolver720.resolve(link) ?: return null
