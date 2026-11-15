@@ -10,27 +10,42 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.systemBarsPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
@@ -42,23 +57,47 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+private val HomecastColors = darkColorScheme(
+    primary = Color(0xFF8AB4FF),
+    onPrimary = Color(0xFF05285E),
+    primaryContainer = Color(0xFF1B3A6E),
+    onPrimaryContainer = Color(0xFFD6E4FF),
+    secondaryContainer = Color(0xFF232B3A),
+    onSecondaryContainer = Color(0xFFD9E2F5),
+    errorContainer = Color(0xFF4A1F24),
+    onErrorContainer = Color(0xFFFFD9DC),
+    background = Color(0xFF0A0C10),
+    onBackground = Color(0xFFE6EAF2),
+    surface = Color(0xFF14181F),
+    onSurface = Color(0xFFE6EAF2),
+    surfaceVariant = Color(0xFF1C222C),
+    onSurfaceVariant = Color(0xFF98A2B3),
+    outline = Color(0xFF2E3646)
+)
 
 class MainActivity : ComponentActivity() {
     private val incoming = mutableStateOf<String?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
+        )
         if (Build.VERSION.SDK_INT >= 33) {
             registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
                 .launch(Manifest.permission.POST_NOTIFICATIONS)
         }
         readShared(intent)
-        setContent { MaterialTheme { HomecastScreen(incoming) } }
+        setContent { MaterialTheme(colorScheme = HomecastColors) { HomecastScreen(incoming) } }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -66,7 +105,7 @@ class MainActivity : ComponentActivity() {
         readShared(intent)
     }
 
-    /** A link shared from the YouTube app lands here and casts straight away. */
+    /** A link shared from the YouTube app (or any app) lands here and casts straight away. */
     private fun readShared(intent: Intent?) {
         if (intent?.action == Intent.ACTION_SEND) {
             intent.getStringExtra(Intent.EXTRA_TEXT)?.let { incoming.value = it }
@@ -93,6 +132,38 @@ private fun openInVlc(ctx: Context, url: String) {
 }
 
 @Composable
+private fun SectionCard(title: String? = null, content: @Composable ColumnScope.() -> Unit) {
+    Surface(
+        shape = RoundedCornerShape(24.dp),
+        color = MaterialTheme.colorScheme.surface,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            if (title != null) {
+                Text(
+                    title.uppercase(),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            content()
+        }
+    }
+}
+
+@Composable
+private fun SwitchRow(title: String, caption: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge)
+            Text(caption, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Spacer(Modifier.width(12.dp))
+        Switch(checked = checked, onCheckedChange = onChange)
+    }
+}
+
+@Composable
 fun HomecastScreen(incoming: MutableState<String?>) {
     val ctx = LocalContext.current
     val prefs = remember { Prefs(ctx) }
@@ -102,6 +173,7 @@ fun HomecastScreen(incoming: MutableState<String?>) {
     var receiverIp by remember { mutableStateOf(prefs.receiverIp) }
     var found by remember { mutableStateOf<List<Renderer>>(emptyList()) }
     var prefer1080 by remember { mutableStateOf(prefs.prefer1080) }
+    var remuxDirect by remember { mutableStateOf(prefs.remuxDirect) }
     var searching by remember { mutableStateOf(false) }
     var results by remember { mutableStateOf<List<VideoHit>>(emptyList()) }
     var searchingVideos by remember { mutableStateOf(false) }
@@ -109,6 +181,7 @@ fun HomecastScreen(incoming: MutableState<String?>) {
     val casting by CastState.casting.collectAsState()
     val testUrl by CastState.testUrl.collectAsState()
     val isLink = link.contains("http")
+    val busy = searching || searchingVideos
 
     suspend fun search(): List<Renderer> {
         searching = true
@@ -199,86 +272,169 @@ fun HomecastScreen(incoming: MutableState<String?>) {
     // VLC test mode: open the stream in VLC as soon as the service has it ready.
     LaunchedEffect(testUrl) { testUrl?.let { openInVlc(ctx, it) } }
 
-    Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        Text("Homecast", style = MaterialTheme.typography.headlineMedium)
-        OutlinedTextField(
-            value = link, onValueChange = { link = it },
-            label = { Text("Search YouTube or paste a link") }, singleLine = true,
-            modifier = Modifier.fillMaxWidth()
-        )
-        Button(
-            onClick = { scope.launch { if (isLink) castLink(link) else searchVideos(link) } },
-            enabled = link.isNotBlank() && !searching && !searchingVideos,
-            modifier = Modifier.fillMaxWidth()
-        ) { Text(if (isLink) "Cast" else "Search") }
-        OutlinedButton(
-            onClick = { videoPicker.launch(arrayOf("video/*")) },
-            modifier = Modifier.fillMaxWidth()
-        ) { Text("Cast a video from this phone") }
-        if (casting) {
-            OutlinedButton(
-                onClick = { ctx.startService(Intent(ctx, CastService::class.java).setAction(CastService.ACTION_STOP)) },
-                modifier = Modifier.fillMaxWidth()
-            ) { Text("Stop") }
-        }
-        Text(status, style = MaterialTheme.typography.bodyLarge)
-
-        testUrl?.let { url ->
-            Text(url, style = MaterialTheme.typography.bodySmall)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = { openInVlc(ctx, url) }) { Text("Open in VLC") }
-                OutlinedButton(onClick = {
-                    (ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager)
-                        .setPrimaryClip(ClipData.newPlainText("Homecast stream", url))
-                    CastState.status.value = "Stream URL copied. In VLC on a PC: Media > Open Network Stream."
-                }) { Text("Copy URL") }
-            }
-        }
-
-        results.forEach { v ->
-            Column(
-                Modifier.fillMaxWidth()
-                    .clickable { scope.launch { castLink(v.url) } }
-                    .padding(vertical = 8.dp)
-            ) {
-                Text(v.title, style = MaterialTheme.typography.titleSmall, maxLines = 2)
-                Text("${v.channel} · ${formatDuration(v.seconds)}", style = MaterialTheme.typography.bodySmall)
-            }
-        }
-
-        Spacer(Modifier.height(12.dp))
-        Text("Receiver: ${receiver?.name ?: "none chosen yet"}", style = MaterialTheme.typography.titleMedium)
-        OutlinedTextField(
-            value = receiverIp,
-            onValueChange = { receiverIp = it; prefs.receiverIp = it },
-            label = { Text("Receiver IP (optional)") }, singleLine = true,
-            modifier = Modifier.fillMaxWidth()
-        )
-        OutlinedButton(onClick = { scope.launch { search() } }, enabled = !searching) {
-            Text(if (searching) "Searching..." else "Search for receivers")
-        }
-        (found + LOCAL_RENDERER).forEach { r ->
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                RadioButton(
-                    selected = receiver?.controlUrl == r.controlUrl,
-                    onClick = { receiver = r; prefs.receiver = r }
+    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+        Column(
+            Modifier.fillMaxSize().systemBarsPadding().verticalScroll(rememberScrollState())
+                .padding(horizontal = 18.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            // Header
+            Column(Modifier.padding(horizontal = 4.dp, vertical = 6.dp)) {
+                Text("Homecast", style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Bold)
+                Text(
+                    "Casting to ${receiver?.name ?: "no receiver yet"}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                Text(r.name)
             }
-        }
 
-        Spacer(Modifier.height(12.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Switch(checked = prefer1080, onCheckedChange = { prefer1080 = it; prefs.prefer1080 = it })
-            Text("  Prefer 1080p (no seeking)")
+            // What to play
+            SectionCard {
+                OutlinedTextField(
+                    value = link, onValueChange = { link = it },
+                    placeholder = { Text("Search YouTube or paste a link") },
+                    singleLine = true,
+                    shape = RoundedCornerShape(16.dp),
+                    trailingIcon = {
+                        TextButton(onClick = {
+                            val clip = (ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).primaryClip
+                            val t = clip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(ctx)?.toString()
+                            if (!t.isNullOrBlank()) link = t
+                        }) { Text("Paste") }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Button(
+                        onClick = { scope.launch { if (isLink) castLink(link) else searchVideos(link) } },
+                        enabled = link.isNotBlank() && !busy,
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier.weight(1f).height(52.dp)
+                    ) { Text(if (isLink) "Cast" else "Search", fontWeight = FontWeight.SemiBold) }
+                    FilledTonalButton(
+                        onClick = { videoPicker.launch(arrayOf("video/*")) },
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier.weight(1f).height(52.dp)
+                    ) { Text("From phone") }
+                }
+            }
+
+            // Status
+            SectionCard {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    if (busy) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                    Text(status, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+                }
+                if (casting) {
+                    FilledTonalButton(
+                        onClick = { ctx.startService(Intent(ctx, CastService::class.java).setAction(CastService.ACTION_STOP)) },
+                        colors = ButtonDefaults.filledTonalButtonColors(
+                            containerColor = MaterialTheme.colorScheme.errorContainer,
+                            contentColor = MaterialTheme.colorScheme.onErrorContainer
+                        ),
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier.fillMaxWidth().height(48.dp)
+                    ) { Text("Stop casting") }
+                }
+                testUrl?.let { url ->
+                    Text(url, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Button(
+                            onClick = { openInVlc(ctx, url) },
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier.weight(1f)
+                        ) { Text("Open in VLC") }
+                        OutlinedButton(
+                            onClick = {
+                                (ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager)
+                                    .setPrimaryClip(ClipData.newPlainText("Homecast stream", url))
+                                CastState.status.value = "Stream URL copied. In VLC on a PC: Media > Open Network Stream."
+                            },
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier.weight(1f)
+                        ) { Text("Copy URL") }
+                    }
+                }
+            }
+
+            // Search results
+            if (results.isNotEmpty()) {
+                SectionCard("Results") {
+                    results.forEach { v ->
+                        Surface(
+                            shape = RoundedCornerShape(16.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            modifier = Modifier.fillMaxWidth().clickable { scope.launch { castLink(v.url) } }
+                        ) {
+                            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                Text(v.title, style = MaterialTheme.typography.titleSmall, maxLines = 2)
+                                Text(
+                                    "${v.channel} · ${formatDuration(v.seconds)}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Receivers
+            SectionCard("Receivers") {
+                (found + LOCAL_RENDERER).forEach { r ->
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth().clickable { receiver = r; prefs.receiver = r }
+                    ) {
+                        RadioButton(
+                            selected = receiver?.controlUrl == r.controlUrl,
+                            onClick = { receiver = r; prefs.receiver = r }
+                        )
+                        Column {
+                            Text(r.name, style = MaterialTheme.typography.bodyLarge)
+                            if (r.isLocal) {
+                                Text(
+                                    "Plays in VLC, no receiver needed",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+                OutlinedTextField(
+                    value = receiverIp,
+                    onValueChange = { receiverIp = it; prefs.receiverIp = it },
+                    label = { Text("Receiver IP (optional)") },
+                    singleLine = true,
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                FilledTonalButton(
+                    onClick = { scope.launch { search() } },
+                    enabled = !searching,
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier.fillMaxWidth().height(48.dp)
+                ) { Text(if (searching) "Searching..." else "Search for receivers") }
+            }
+
+            // Settings
+            SectionCard("Playback") {
+                SwitchRow(
+                    "Prefer 1080p",
+                    if (prefer1080) "1080p when available, otherwise 720p with seeking."
+                    else "720p with seeking when available, otherwise 1080p without seeking.",
+                    prefer1080
+                ) { prefer1080 = it; prefs.prefer1080 = it }
+                SwitchRow(
+                    "Remux direct links",
+                    if (remuxDirect) "Video files (.mkv etc.) are converted to TS for fussy receivers. No seeking."
+                    else "Video files (.mkv etc.) play as they are, with seeking.",
+                    remuxDirect
+                ) { remuxDirect = it; prefs.remuxDirect = it }
+            }
+
+            Spacer(Modifier.height(12.dp))
         }
-        Text(
-            if (prefer1080) "1080p when available, otherwise 720p with seeking."
-            else "720p with seeking when available, otherwise 1080p without seeking.",
-            style = MaterialTheme.typography.bodySmall
-        )
     }
 }
