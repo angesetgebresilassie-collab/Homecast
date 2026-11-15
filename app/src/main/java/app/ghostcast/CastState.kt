@@ -39,6 +39,11 @@ class Prefs(ctx: Context) {
         get() = sp.getBoolean("p1080", false)
         set(v) { sp.edit().putBoolean("p1080", v).apply() }
 
+    /** Direct links (.mkv etc.): remux to MPEG-TS through FFmpeg (no seeking) instead of passing the file through. */
+    var remuxDirect: Boolean
+        get() = sp.getBoolean("remuxDirect", false)
+        set(v) { sp.edit().putBoolean("remuxDirect", v).apply() }
+
     /** Optional manual receiver IP, used as an extra unicast target during discovery. */
     var receiverIp: String
         get() = sp.getString("rIp", "") ?: ""
