@@ -12,15 +12,14 @@ android {
         applicationId = "app.ghostcast"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
         ndk { abiFilters += "arm64-v8a" }   // the maintained FFmpegKit fork only ships arm64-v8a
     }
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
-        isCoreLibraryDesugaringEnabled = true   // required by NewPipeExtractor
     }
     kotlinOptions { jvmTarget = "17" }
     buildFeatures { compose = true }
@@ -37,13 +36,10 @@ android {
 }
 
 dependencies {
-    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs_nio:2.1.5")
-
-    // v0.24.x predates YouTube's SABR enforcement; 0.26.3+ switches player client so streams resolve again
-    implementation("com.github.TeamNewPipe:NewPipeExtractor:v0.26.5")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("org.nanohttpd:nanohttpd:2.3.1")
     implementation("dev.ffmpegkit-maintained:ffmpeg:6.0.3")   // free tier: no TLS, stream copy is fine
+    implementation("io.coil-kt:coil-compose:2.7.0")           // movie posters
 
     implementation(platform("androidx.compose:compose-bom:2024.10.01"))
     implementation("androidx.compose.material3:material3")
