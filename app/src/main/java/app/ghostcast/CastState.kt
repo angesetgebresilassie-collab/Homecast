@@ -10,10 +10,20 @@ const val LOCAL_PREFIX = "local://"
 val LOCAL_RENDERER = Renderer("This phone (VLC test)", "${LOCAL_PREFIX}vlc")
 val Renderer.isLocal: Boolean get() = controlUrl.startsWith(LOCAL_PREFIX)
 
+/** What the receiver is playing right now (shown in the status card). */
+data class NowPlaying(
+    val title: String,
+    val subtitle: String?,
+    val poster: String?,
+    val position: Int,      // 1-based index in the queue
+    val total: Int
+)
+
 /** Shared between the UI and the cast service. */
 object CastState {
-    val status = MutableStateFlow("Search YouTube or paste a link")
+    val status = MutableStateFlow("Paste a video link")
     val casting = MutableStateFlow(false)
+    val nowPlaying = MutableStateFlow<NowPlaying?>(null)
 
     /** Set by the service in VLC-test mode: the HTTP URL VLC (on this phone or a PC) can open. */
     val testUrl = MutableStateFlow<String?>(null)
@@ -34,10 +44,6 @@ class Prefs(ctx: Context) {
                 else { putString("rName", v.name); putString("rControl", v.controlUrl) }
             }.apply()
         }
-
-    var prefer1080: Boolean
-        get() = sp.getBoolean("p1080", false)
-        set(v) { sp.edit().putBoolean("p1080", v).apply() }
 
     /** Direct links (.mkv etc.): remux to MPEG-TS through FFmpeg (no seeking) instead of passing the file through. */
     var remuxDirect: Boolean
