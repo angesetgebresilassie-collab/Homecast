@@ -85,9 +85,10 @@ class CastService : Service() {
         val uriStr = intent?.getStringExtra(EXTRA_URI)
         val ctl = intent?.getStringExtra(EXTRA_CONTROL)
         if ((queueJson == null && uriStr == null) || ctl == null) { stopSelf(); return START_NOT_STICKY }
+        val startAt = intent?.getIntExtra(EXTRA_INDEX, 0) ?: 0
 
         target = ctl
-        targetName = intent.getStringExtra(EXTRA_NAME) ?: "receiver"
+        targetName = intent?.getStringExtra(EXTRA_NAME) ?: "receiver"
         queue = if (queueJson != null) PlaylistItem.listFromJson(queueJson) else emptyList()
         startFg()
 
@@ -106,7 +107,7 @@ class CastService : Service() {
         } else if (queue.isEmpty()) {
             stopSelf()
         } else {
-            play((intent.getIntExtra(EXTRA_INDEX, 0)).coerceIn(queue.indices))
+            play(startAt.coerceIn(0, queue.size - 1))
         }
         return START_NOT_STICKY
     }
